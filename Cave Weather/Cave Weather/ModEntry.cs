@@ -37,6 +37,9 @@ namespace CaveWeather
         private CaveWeatherType TodayCaveWeather = CaveWeatherType.None;
         private bool HasShownCaveMessageToday;
 
+        // currently applied per-day buff defense delta (null => no DayBuff applied by us)
+        private int? AppliedDayBuffDefense = null;
+
         // Berserker
         private readonly Dictionary<Monster, int> MonsterLastHealth = new();
         private readonly HashSet<Monster> BerserkedMonsters = new();
@@ -88,6 +91,12 @@ namespace CaveWeather
             this.FrenzyAdjustedMonsters.Clear();
             this.DrawFrenzyFog = false;
             this.ResetTemporalFluxPhase();
+
+            // Ensure any DayBuff we may have applied in a previous day/save is removed on day start.
+            if (Game1.player is not null)
+                Game1.player.buffs.Remove(DayBuffId);
+
+            this.AppliedDayBuffDefense = null;
 
             // roll today
             if (this.Rng.NextDouble() > this.Config.DailyCaveWeatherChance)
@@ -447,6 +456,10 @@ namespace CaveWeather
         {
             var cfg = this.Config.FrenzyFog;
 
+            // throttle scans: check for newly spawned monsters every 10 ticks
+            if (!e.IsMultipleOf(10))
+                return;
+
             foreach (Monster monster in location.characters.OfType<Monster>())
             {
                 if (this.FrenzyAdjustedMonsters.Contains(monster))
@@ -543,44 +556,68 @@ namespace CaveWeather
         {
             if (Game1.player is null)
                 return;
-
-            int defenseDelta = 0;
+            int desiredDefenseDelta = 0;
 
             if (inMine && this.TodayCaveWeather != CaveWeatherType.None && this.IsWeatherAllowedHere(this.TodayCaveWeather, kind))
             {
                 switch (this.TodayCaveWeather)
                 {
                     case CaveWeatherType.BerserkerDay:
-                        defenseDelta = this.Config.BerserkerDay.PlayerDefenseBonus;
+                        desiredDefenseDelta = this.Config.BerserkerDay.PlayerDefenseBonus;
                         break;
 
                     case CaveWeatherType.FrenzyFog:
-                        defenseDelta = this.Config.FrenzyFog.PlayerDefenseBonus;
+                        desiredDefenseDelta = this.Config.FrenzyFog.PlayerDefenseBonus;
                         break;
 
                     case CaveWeatherType.BloodthirstWinds:
-                        defenseDelta = -this.Config.BloodthirstWinds.PlayerDefensePenalty;
+                        desiredDefenseDelta = -this.Config.BloodthirstWinds.PlayerDefensePenalty;
                         break;
                 }
             }
 
-            BuffEffects effects = new BuffEffects();
-            if (defenseDelta != 0)
-                effects.Defense.Add(defenseDelta);
-
-            Buff buff = new Buff(
-                id: DayBuffId,
-                displayName: this.Helper.Translation.Get("buff.daybuff.name"),
-                iconTexture: Game1.buffsIcons,
-                iconSheetIndex: 0,
-                duration: Buff.ENDLESS,
-                effects: effects
-            )
+            // If nothing changed, avoid allocating + applying a Buff every tick.
+            if (this.AppliedDayBuffDefense.HasValue)
             {
-                visible = false
-            };
+                if (this.AppliedDayBuffDefense.Value == desiredDefenseDelta)
+                    return;
+            }
+            else
+            {
+                // no buff currently known to be applied; if desired is zero, nothing to do
+                if (desiredDefenseDelta == 0)
+                    return;
+            }
 
-            Game1.player.applyBuff(buff);
+            // Need to change state: apply new buff or remove existing one.
+            if (desiredDefenseDelta != 0)
+            {
+                BuffEffects effects = new BuffEffects();
+                effects.Defense.Add(desiredDefenseDelta);
+
+                Buff buff = new Buff(
+                    id: DayBuffId,
+                    displayName: this.Helper.Translation.Get("buff.daybuff.name"),
+                    iconTexture: Game1.buffsIcons,
+                    iconSheetIndex: 0,
+                    duration: Buff.ENDLESS,
+                    effects: effects
+                )
+                {
+                    visible = false
+                };
+
+                // Apply (add or refresh) the buff once.
+                Game1.player.applyBuff(buff);
+                this.AppliedDayBuffDefense = desiredDefenseDelta;
+            }
+            else
+            {
+                // desired is zero: remove our day buff if present.
+                Game1.player.buffs.Remove(DayBuffId);
+
+                this.AppliedDayBuffDefense = null;
+            }
         }
 
         // --------------------
