@@ -11,7 +11,7 @@
 
     public sealed class ModConfig
     {
-        public double DailyCaveWeatherChance { get; set; } = 0.25;
+        public double DailyCaveWeatherChance { get; set; } = 0.15;
 
         public FungalHarvestConfig FungalHarvest { get; set; } = new();
         public TemporalFluxConfig TemporalFlux { get; set; } = new();
